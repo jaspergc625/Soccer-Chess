@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Soccer Chess</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="hud">
+      <div class="hud-block">
+        <div class="hud-label">Phase</div>
+        <div id="hud-phase" class="hud-value">PLANNING</div>
+      </div>
+      <div class="hud-block scoreboard">
+        <div class="team-score blue">
+          <span class="team-name">Blue</span>
+          <span id="score-blue">0</span>
+        </div>
+        <div class="score-divider">–</div>
+        <div class="team-score orange">
+          <span id="score-orange">0</span>
+          <span class="team-name">Orange</span>
+        </div>
+      </div>
+      <div class="hud-block">
+        <div class="hud-label">Planning</div>
+        <div id="hud-turn" class="hud-value">Blue Team</div>
+      </div>
+    </header>
+
+    <main id="table">
+      <section id="field-column">
+        <div id="goal-top" class="goal-mouth" aria-hidden="true">
+          <div class="goal-frame">
+            <div class="goal-post left"></div>
+            <div class="goal-net"></div>
+            <div class="goal-post right"></div>
+          </div>
+          <div class="goal-label">ORANGE GOAL</div>
+        </div>
+
+        <div id="pitch">
+          <div id="markings" aria-hidden="true">
+            <div class="halfway"></div>
+            <div class="center-circle"></div>
+            <div class="center-spot"></div>
+            <div class="box top"></div>
+            <div class="box bottom"></div>
+          </div>
+          <div id="board"></div>
+          <svg id="arrows" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div id="pieces"></div>
+        </div>
+
+        <div id="goal-bottom" class="goal-mouth" aria-hidden="true">
+          <div class="goal-label">BLUE GOAL</div>
+          <div class="goal-frame">
+            <div class="goal-post left"></div>
+            <div class="goal-net"></div>
+            <div class="goal-post right"></div>
+          </div>
+        </div>
+      </section>
+
+      <aside id="sidebar">
+        <div id="selected-panel" class="panel">
+          <h2>Orders</h2>
+          <p id="selected-help" class="help">Click one of your players to give an order.</p>
+          <div id="action-buttons" class="action-grid"></div>
+          <div id="risk-panel" class="risk-panel" hidden></div>
+          <div id="curve-dir-row" class="curve-dir-row" hidden></div>
+          <button id="btn-clear" class="ghost" type="button" hidden>Clear this order</button>
+        </div>
+
+        <div class="panel">
+          <h2>This round</h2>
+          <ul id="plan-list"></ul>
+          <button id="btn-lock" type="button">LOCK IN</button>
+        </div>
+
+        <div class="panel">
+          <h2>What happened</h2>
+          <ul id="event-log"></ul>
+        </div>
+
+        <details class="panel howto">
+          <summary>How to play</summary>
+          <ol>
+            <li>Both teams plan in secret, then moves happen at the same time.</li>
+            <li>Move 1 square, or sprint 2 squares in a straight line.</li>
+            <li>Pass to a teammate, an opponent, or empty space within 3 squares. ⚽ always stays visible.</li>
+            <li>Normal pass is reliable. Curve pass and air ball can beat a lane, but show their miss chances before you lock in.</li>
+            <li>Defenders can hold a directional zone or tackle an adjacent ball carrier.</li>
+            <li>First to 3 goals wins.</li>
+          </ol>
+        </details>
+      </aside>
+    </main>
+  </div>
+
+  <div id="overlay" class="overlay hidden" hidden role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="overlay-card">
+      <h1 id="overlay-title"></h1>
+      <p id="overlay-body"></p>
+      <div id="overlay-actions" class="overlay-actions">
+        <button id="overlay-btn" type="button">Ready</button>
+        <button id="overlay-btn-alt" type="button" hidden>MAIN MENU</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="goal-banner" class="goal-banner hidden" hidden aria-live="assertive">GOAL!</div>
+
+  <script src="config.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
