@@ -77,17 +77,92 @@ const CONFIG = {
   KICKOFF_TEAM: "blue",
   HUMAN_TEAM: "blue",
   CPU_TEAM: "orange",
-  CPU_DIFFICULTY: "MEDIUM",
+  CPU_DIFFICULTY: "PRO",
   CPU_THINK_MS: 280,
 
   /**
-   * Later: swap CPU_DIFFICULTY to EASY / HARD.
-   * topN + weights pick among high-scoring legal actions (not the whole list).
+   * Player-facing CPU difficulties. All four use the same legal-action generator
+   * and the same game rules. Only search quality, prediction, and mistake rate change.
+   *
+   * topN / weights: pick among the best-scoring legal actions
+   * mistakeChance: sometimes take a legal but lower-ranked option
+   * chaseBall: defenders run at the ball (high) vs hold shape (low)
+   * coverSpace: value of zones / lanes / own-box cover
+   * predictPlayer: weight of "what would a decent opponent do next"
+   * lookAhead: 0 = current board, 1 = immediate threats, 2+ = likely replies
+   * riskUse: willingness to take curve/air when the extra value is there
+   * tackleBias: eagerness to dive in (low = knows when not to tackle)
+   * scoreJitter: tiny noise so repeats are not identical
    */
   CPU_PROFILES: {
-    EASY: { topN: 5, weights: [0.34, 0.24, 0.18, 0.14, 0.1] },
-    MEDIUM: { topN: 3, weights: [0.5, 0.3, 0.2] },
-    HARD: { topN: 2, weights: [0.75, 0.25] },
+    ROOKIE: {
+      label: "Rookie",
+      topN: 7,
+      weights: [0.22, 0.18, 0.16, 0.14, 0.12, 0.1, 0.08],
+      mistakeChance: 0.32,
+      mistakeDepth: 9,
+      chaseBall: 1.45,
+      coverSpace: 0.4,
+      predictPlayer: 0.08,
+      lookAhead: 0,
+      predictBranches: 1,
+      riskUse: 0.55,
+      tackleBias: 1.28,
+      laneAwareness: 0.4,
+      scoreJitter: 14,
+      patternMemory: false,
+    },
+    PRO: {
+      label: "Pro",
+      topN: 3,
+      weights: [0.52, 0.3, 0.18],
+      mistakeChance: 0.12,
+      mistakeDepth: 5,
+      chaseBall: 0.9,
+      coverSpace: 1.05,
+      predictPlayer: 0.42,
+      lookAhead: 1,
+      predictBranches: 1,
+      riskUse: 1.0,
+      tackleBias: 1.0,
+      laneAwareness: 1.0,
+      scoreJitter: 6,
+      patternMemory: false,
+    },
+    MASTER: {
+      label: "Master",
+      topN: 2,
+      weights: [0.8, 0.2],
+      mistakeChance: 0.045,
+      mistakeDepth: 3,
+      chaseBall: 0.48,
+      coverSpace: 1.5,
+      predictPlayer: 0.9,
+      lookAhead: 2,
+      predictBranches: 2,
+      riskUse: 1.22,
+      tackleBias: 0.72,
+      laneAwareness: 1.2,
+      scoreJitter: 3,
+      patternMemory: false,
+    },
+    DEV: {
+      label: "Dev",
+      topN: 1,
+      weights: [1],
+      mistakeChance: 0.018,
+      mistakeDepth: 2,
+      chaseBall: 0.28,
+      coverSpace: 1.75,
+      predictPlayer: 1.0,
+      lookAhead: 3,
+      predictBranches: 3,
+      riskUse: 1.32,
+      tackleBias: 0.62,
+      laneAwareness: 1.3,
+      scoreJitter: 2,
+      patternMemory: true,
+    },
   },
 
   REVEAL_MS: 1100,        // time both arrow sets are shown before pieces move
@@ -99,6 +174,20 @@ const CONFIG = {
   BOUNCE_PAUSE_MS: 160,   // hold on the receiver before a bad-touch bounce
   GOAL_NET_MS: 420,       // ⚽ slides from the goal line into the net
   GOAL_PAUSE_MS: 950,     // hold on the ball in the net before kickoff
+
+  COIN_STORAGE_KEY: "soccerChess.wallet",
+  GOAL_REWARD: 25,
+  INTERCEPTION_REWARD: 10,
+  SHOT_BLOCK_REWARD: 10,
+  WIN_REWARD: 100,
+  MATCH_COMPLETE_REWARD: 15,
+  LOSS_REWARD: 10,
+  PASS_REWARD: 0,
+  SPRINT_REWARD: 0,
+  MOVE_REWARD: 0,
+  TACKLE_REWARD: 0,
+  DEFEND_REWARD: 0,
+  COIN_TOAST_MS: 1500,
 };
 
 CONFIG.RISK = {
@@ -118,6 +207,166 @@ CONFIG.RISK = {
     { outcome: "wild", chance: CONFIG.CURVE_SHOT_WILD_MISS_CHANCE, label: "Wild Miss" },
   ],
 };
+
+CONFIG.AI_FLAVOR = {
+  HOVER: {
+    ROOKIE: [
+      "Your first opponent. Be gentle.",
+      "Perfect for making you feel smart.",
+      "Still learning the game.",
+      "It knows which way the goal is.",
+      "It’s trying its best.",
+      "A perfect warm-up. Probably.",
+      "It has a plan. Probably.",
+      "Don’t overthink this one.",
+      "It has discovered soccer.",
+      "It may accidentally help you.",
+      "It knows the rules. Mostly.",
+      "A gentle introduction to suffering.",
+      "It’s got this. Probably.",
+      "It knows the game. Kind of.",
+      "It makes mistakes. Lots of them.",
+      "It sees the ball. Usually.",
+      "It has a strategy. Sort of.",
+      "It’s learning. You’re not.",
+      "This one shouldn't be too difficult.",
+    ],
+    PRO: [
+      "You’re going to have to earn those goals.",
+      "It makes mistakes. Just fewer of them.",
+      "Okay, it actually knows what it’s doing.",
+      "Free goals are no longer guaranteed.",
+      "It has started thinking.",
+      "You might actually have to think now.",
+      "It’s not falling for everything anymore.",
+      "It knows a few tricks.",
+      "Your mistakes are starting to matter.",
+      "It’s getting suspicious.",
+      "You’re going to have to earn this one.",
+      "It knows the rules. And how to use them.",
+      "It has figured out what passing is.",
+      "Welcome to the actual game.",
+      "It’s getting harder to fool.",
+      "Your usual tricks might not work anymore.",
+    ],
+    MASTER: [
+      "It has a plan for your plan.",
+      "It can counter your counter for its counter.",
+      "Hope you have a backup plan.",
+      "It’s been waiting for you to make that move.",
+      "It already knows what you’re trying to do.",
+      "You have a plan. It has three.",
+      "Your backup plan needs a backup plan.",
+      "It was hoping you’d do that.",
+      "You’re not the only one thinking.",
+      "Every move gives it information.",
+      "It’s not chasing the ball anymore.",
+      "It’s playing the board, not the ball.",
+      "You might want to stop being predictable.",
+      "It has been saving that counter.",
+      "Congratulations. You’ve become predictable.",
+      "Think carefully. It is.",
+      "Your first move was already part of its plan.",
+      "You’re going to have to outthink it.",
+      "Good luck hiding your intentions.",
+    ],
+    DEV: [
+      "You probably shouldn’t play this.",
+      "Seriously. Don’t.",
+      "This is a terrible idea.",
+      "You have been warned.",
+      "Why is this even an option?",
+      "You asked for this.",
+      "There is still time to turn back.",
+      "For testing purposes only.",
+      "We strongly recommend Rookie.",
+      "Are you sure about this?",
+      "This one is not here to make friends.",
+      "You wanted the hardest AI. Here it is.",
+      "This is above your pay grade.",
+      "Please reconsider your life choices.",
+      "You clicked Dev. That’s on you.",
+      "There is still time to choose something easier.",
+    ],
+  },
+  CONFIRM_DEV: [
+    "Seriously. Don’t. We accept no liability for any trauma caused by this match.",
+    "Are you absolutely sure? We tried to warn you.",
+    "You can still go back. Nobody will judge you.",
+    "This is your final warning.",
+    "We strongly recommend choosing literally anything else.",
+    "You clicked Dev. That’s on you.",
+    "Please reconsider your life choices.",
+  ],
+  START: {
+    ROOKIE: [
+      "Your first opponent. Be gentle.",
+      "Good luck. You got this.",
+      "Try not to embarrass it.",
+      "Remember: this is supposed to be easy.",
+      "Let’s see what you’ve learned.",
+    ],
+    PRO: [
+      "Alright. Time to actually play.",
+      "Free goals have been disabled.",
+      "Hope you brought a strategy.",
+      "It’s not going to let you have this one.",
+      "Okay, now it gets interesting.",
+    ],
+    MASTER: [
+      "You wanted a challenge. You got one.",
+      "Think before you move.",
+      "It’s already thinking.",
+      "Whatever you do, don’t become predictable.",
+      "Good luck hiding your intentions.",
+      "You have one plan. It has several.",
+    ],
+    DEV: [
+      "You wanted a challenge. Here it is.",
+      "You can still turn back.",
+      "You were warned.",
+      "Remember: you chose this.",
+      "This was entirely your decision.",
+      "Good luck. Seriously.",
+      "Godspeed.",
+    ],
+  },
+};
+
+/** Older names still resolve if anything reads them. */
+CONFIG.CPU_PROFILES.EASY = CONFIG.CPU_PROFILES.ROOKIE;
+CONFIG.CPU_PROFILES.MEDIUM = CONFIG.CPU_PROFILES.PRO;
+CONFIG.CPU_PROFILES.HARD = CONFIG.CPU_PROFILES.MASTER;
+
+/**
+ * Shop catalog. Keep this data-driven so items can be added later without
+ * rewriting the shop screen. Leave it empty until real items exist.
+ *
+ * Expected item shape:
+ *   { id, name, category, price, type, asset }
+ *
+ * Purchased / equipped state lives in the local wallet, not here.
+ */
+CONFIG.SHOP_ITEMS = [];
+
+/**
+ * Future team logos — research only, do not implement yet.
+ *
+ * A. Creation: prefer small local SVG (or PNG) files in an assets/logos folder.
+ *    SVG keeps the current no-build, static-file setup and scales on the HUD.
+ *    Do not generate logos at runtime; cache-busting and style control are worse.
+ *
+ * B. Countries: ship a short curated set (not every FIFA nation). Store
+ *    { id: "eng", name: "England", category: "nation", asset: "assets/logos/nations/eng.svg" }.
+ *    Simple geometric / simplified crests beat full-detail reproductions.
+ *
+ * C. Clubs: same catalog pattern, category "club", assets under
+ *    assets/logos/clubs/<id>.svg. Unlock via shopItems price + wallet.purchases[id].
+ *
+ * D. Licensing: official club and many national crests are trademarked.
+ *    Do not scrape or bundle real badges without a license. Use original
+ *    geometric marks, public-domain historical marks, or licensed packs.
+ */
 
 /**
  * Eight compass directions. DEFEND uses the same set.

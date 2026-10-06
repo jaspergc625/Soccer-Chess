@@ -52,6 +52,16 @@ body {
   gap: 2px;
 }
 
+.hud-left {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.coin-hud .hud-value {
+  font-size: 16px;
+}
+
 .hud-block:last-child {
   align-items: flex-end;
   text-align: right;
@@ -456,7 +466,8 @@ body {
 #btn-lock,
 #btn-clear,
 #overlay-btn,
-#overlay-btn-alt {
+#overlay-btn-alt,
+#overlay-btn-shop {
   border: 0;
   border-radius: 8px;
   padding: 10px 12px;
@@ -586,7 +597,9 @@ body {
   color: #ffd56a;
 }
 
-#event-log li.steal {
+#event-log li.steal,
+#event-log li.intercept,
+#event-log li.block {
   color: #f4a261;
 }
 
@@ -650,7 +663,8 @@ body {
   min-width: 180px;
 }
 
-#overlay-btn-alt {
+#overlay-btn-alt,
+#overlay-btn-shop {
   background: transparent;
   border: 1px solid var(--panel-edge);
   color: var(--ink);
@@ -681,6 +695,198 @@ body {
 .overlay.menu-mode #overlay-btn-alt {
   background: #2b4535;
   color: var(--ink);
+}
+
+.overlay.menu-mode #overlay-btn-shop {
+  width: 100%;
+  min-width: 0;
+  padding: 16px 12px;
+  font-size: 15px;
+  letter-spacing: 0.1em;
+  background: #2b4535;
+  color: var(--ink);
+  border: 0;
+}
+
+.menu-coins {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 800;
+  color: #e7ed7a;
+  letter-spacing: 0.04em;
+}
+
+.shop-shelf {
+  min-height: 120px;
+  margin: 8px 0 4px;
+  padding: 22px 16px;
+  border: 1px dashed #3c5a46;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.shop-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.shop-grid {
+  display: grid;
+  gap: 10px;
+  text-align: left;
+}
+
+.shop-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #15251c;
+  border: 1px solid var(--panel-edge);
+}
+
+.shop-item-name {
+  font-weight: 800;
+}
+
+.shop-item-cat {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.shop-item-price {
+  color: #e7ed7a;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.overlay.shop-mode .overlay-card {
+  width: min(440px, calc(100% - 32px));
+}
+
+.coin-summary {
+  text-align: left;
+  margin: 0 auto 8px;
+  width: 100%;
+}
+
+.coin-summary ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.coin-summary li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0;
+  border-bottom: 1px solid #2a4032;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.coin-summary li strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.coin-summary li.total,
+.coin-summary li.balance {
+  color: #e7ed7a;
+  font-weight: 800;
+  border-bottom: 0;
+  padding-top: 10px;
+}
+
+.coin-toast {
+  position: fixed;
+  top: 86px;
+  right: 20px;
+  z-index: 28;
+  background: #16241b;
+  border: 1px solid #e7ed7a;
+  color: #e7ed7a;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-align: right;
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.coin-toast .toast-label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.coin-toast.hidden {
+  display: none;
+}
+
+.overlay-extra {
+  margin: 4px 0 8px;
+}
+
+.ai-flavor {
+  min-height: 3.1em;
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.ai-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-grid button {
+  width: 100%;
+  padding: 14px 12px;
+  font-size: 15px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: #2b4535;
+  color: var(--ink);
+  border: 1px solid #3c5a46;
+}
+
+.ai-grid button:hover,
+.ai-grid button:focus-visible {
+  background: #e7ed7a;
+  color: #1a2418;
+  border-color: #e7ed7a;
+}
+
+.ai-grid button.dev {
+  background: #3a2424;
+  border-color: #6a3a3a;
+}
+
+.ai-grid button.dev:hover,
+.ai-grid button.dev:focus-visible {
+  background: #e7ed7a;
+  color: #1a2418;
+  border-color: #e7ed7a;
+}
+
+.overlay.ai-select .overlay-card {
+  width: min(440px, calc(100% - 32px));
 }
 
 .goal-banner {

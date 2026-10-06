@@ -327,6 +327,8 @@
   let drag = null;
   let timers = [];
   let rafIds = [];
+  let wallet = emptyWallet();
+  let coinToastTimer = null;
 
   function later(fn, ms) {
     const id = setTimeout(fn, ms);
@@ -352,6 +354,7 @@
       cancelAnimationFrame(id);
     });
     rafIds = [];
+    hideCoinToast();
   }
 
   function createUnits() {
@@ -389,13 +392,17 @@
     return { blue: {}, orange: {} };
   }
 
-  function freshMatch(mode) {
+  function freshMatch(mode, difficulty) {
     const units = createUnits();
     const gameMode = mode || "PVP";
+    const aliases = { EASY: "ROOKIE", MEDIUM: "PRO", HARD: "MASTER" };
+    let cpuDifficulty = difficulty || CONFIG.CPU_DIFFICULTY || "PRO";
+    cpuDifficulty = aliases[cpuDifficulty] || cpuDifficulty;
+    if (!CONFIG.CPU_PROFILES[cpuDifficulty]) cpuDifficulty = "PRO";
     return {
       gameMode,
       cpuTeam: CONFIG.CPU_TEAM || "orange",
-      cpuDifficulty: CONFIG.CPU_DIFFICULTY || "MEDIUM",
+      cpuDifficulty: cpuDifficulty,
       fxBall: null, // visualBallPosition {left, top} while the ⚽ is in flight; logical ball stays on the grid
       phase: "handoff", // menu | handoff | planning | cpu | reveal | frozen | goal | gameover
       planningTeam: CONFIG.FIRST_PLANNING_TEAM,
@@ -416,6 +423,9 @@
       pendingKickoff: null,
       previewDest: null,
       pendingCurveDir: CURVE_DIR.LEFT,
+      cpuMemory: { recent: [] },
+      roundIndex: 0,
+      matchRewards: blankMatchRewards(),
     };
   }
 
@@ -425,6 +435,315 @@
 
   function humanTeam() {
     return CONFIG.HUMAN_TEAM || "blue";
+  }
+
+  // ---------------------------------------------------------------------------
+  // Coins, wallet, shop (economy stays out of resolve/UI drawing)
+  // ---------------------------------------------------------------------------
+
+  function emptyWallet() {
+    return { coins: 0, purchases: {}, equipped: {} };
+  }
+
+  function blankMatchRewards() {
+    return {
+      awarded: {},
+      play: { goals: 0, intercepts: 0, blocks: 0, coins: 0 },
+      matchSettled: false,
+      lastSettlement: null,
+    };
+  }
+
+  function loadWallet() {
+    const fallback = emptyWallet();
+    try {
+      const raw = localStorage.getItem(CONFIG.COIN_STORAGE_KEY || "soccerChess.wallet");
+      if (!raw) return fallback;
+      const parsed = JSON.parse(raw);
+      const purchases = parsed.purchases && typeof parsed.purchases === "object" ? parsed.purchases : {};
+      const equipped = parsed.equipped && typeof parsed.equipped === "object" ? parsed.equipped : {};
+      return {
+        coins: Math.max(0, Math.floor(Number(parsed.coins) || 0)),
+        purchases: purchases,
+        equipped: equipped,
+      };
+    } catch (err) {
+      return fallback;
+    }
+  }
+
+  function saveWallet() {
+    try {
+      localStorage.setItem(CONFIG.COIN_STORAGE_KEY || "soccerChess.wallet", JSON.stringify(wallet));
+    } catch (err) {
+      /* private mode / blocked storage */
+    }
+  }
+
+  function formatCoins(n) {
+    return "🪙 " + Math.max(0, Math.floor(Number(n) || 0));
+  }
+
+  function refreshCoinUi() {
+    if (els.hudCoins) els.hudCoins.textContent = formatCoins(wallet.coins);
+    const menu = document.getElementById("menu-coins");
+    if (menu) menu.textContent = formatCoins(wallet.coins);
+    const shop = document.getElementById("shop-coins");
+    if (shop) shop.textContent = formatCoins(wallet.coins);
+  }
+
+  function hideCoinToast() {
+    if (coinToastTimer) {
+      clearTimeout(coinToastTimer);
+      coinToastTimer = null;
+    }
+    if (!els.coinToast) return;
+    els.coinToast.classList.add("hidden");
+    els.coinToast.setAttribute("hidden", "");
+  }
+
+  function showCoinToast(amount, reason) {
+    if (!els.coinToast || !amount) return;
+    const labels = {
+      goal: "GOAL!",
+      intercept: "INTERCEPTION!",
+      block: "SHOT BLOCKED!",
+    };
+    const label = labels[reason] || "";
+    els.coinToast.innerHTML =
+      (label ? '<span class="toast-label">' + label + "</span>" : "") + "+" + amount + " Coins";
+    els.coinToast.classList.remove("hidden");
+    els.coinToast.removeAttribute("hidden");
+    if (coinToastTimer) clearTimeout(coinToastTimer);
+    coinToastTimer = setTimeout(hideCoinToast, CONFIG.COIN_TOAST_MS || 1500);
+  }
+
+  function rewardAlreadyCounted(eventId) {
+    return !!(state && state.matchRewards && eventId && state.matchRewards.awarded[eventId]);
+  }
+
+  function markRewardCounted(eventId) {
+    if (!state || !state.matchRewards || !eventId) return;
+    state.matchRewards.awarded[eventId] = true;
+  }
+
+  /**
+   * Single entry point for coin payouts. amount <= 0 is ignored so pass/sprint/
+   * move/tackle/defend never spawn toasts even if someone wires those constants.
+   */
+  function awardCoins(amount, reason, eventId, opts) {
+    const payout = Math.floor(Number(amount) || 0);
+    if (payout <= 0) return 0;
+    if (rewardAlreadyCounted(eventId)) return 0;
+    markRewardCounted(eventId);
+    wallet.coins = Math.max(0, wallet.coins + payout);
+    saveWallet();
+    refreshCoinUi();
+    if (state && state.matchRewards && state.matchRewards.play) {
+      if (reason === "goal") state.matchRewards.play.goals += 1;
+      if (reason === "intercept") state.matchRewards.play.intercepts += 1;
+      if (reason === "block") state.matchRewards.play.blocks += 1;
+      if (reason === "goal" || reason === "intercept" || reason === "block") {
+        state.matchRewards.play.coins += payout;
+      }
+    }
+    if (!(opts && opts.silent)) showCoinToast(payout, reason);
+    return payout;
+  }
+
+  function spendCoins(amount, reason, eventId) {
+    const cost = Math.floor(Number(amount) || 0);
+    if (cost <= 0) return false;
+    if (wallet.coins < cost) return false;
+    if (rewardAlreadyCounted(eventId)) return false;
+    markRewardCounted(eventId);
+    wallet.coins = Math.max(0, wallet.coins - cost);
+    saveWallet();
+    refreshCoinUi();
+    return true;
+  }
+
+  function shopCatalog() {
+    return CONFIG.SHOP_ITEMS || [];
+  }
+
+  function isPurchased(id) {
+    return !!(wallet.purchases && wallet.purchases[id]);
+  }
+
+  function isEquipped(id) {
+    if (!wallet.equipped) return false;
+    for (const key in wallet.equipped) {
+      if (wallet.equipped[key] === id) return true;
+    }
+    return false;
+  }
+
+  function buyShopItem(id) {
+    const item = shopCatalog().find(function (entry) {
+      return entry.id === id;
+    });
+    if (!item || isPurchased(id)) return false;
+    if (!spendCoins(item.price, "purchase", "buy-" + id)) return false;
+    wallet.purchases[id] = true;
+    saveWallet();
+    refreshCoinUi();
+    return true;
+  }
+
+  function equipShopItem(id) {
+    const item = shopCatalog().find(function (entry) {
+      return entry.id === id;
+    });
+    if (!item || !isPurchased(id)) return false;
+    wallet.equipped[item.category || item.type || "item"] = id;
+    saveWallet();
+    return true;
+  }
+
+  function renderShopShelf(parent) {
+    const shelf = document.createElement("div");
+    shelf.className = "shop-shelf";
+    const items = shopCatalog();
+    if (!items.length) {
+      const empty = document.createElement("p");
+      empty.className = "shop-empty";
+      empty.textContent = "More items coming soon.";
+      shelf.appendChild(empty);
+    } else {
+      const grid = document.createElement("div");
+      grid.className = "shop-grid";
+      items.forEach(function (item) {
+        const card = document.createElement("div");
+        card.className = "shop-item";
+        const info = document.createElement("div");
+        const name = document.createElement("div");
+        name.className = "shop-item-name";
+        name.textContent = item.name;
+        const cat = document.createElement("span");
+        cat.className = "shop-item-cat";
+        cat.textContent = item.category || item.type || "";
+        info.appendChild(name);
+        if (cat.textContent) info.appendChild(cat);
+        const price = document.createElement("div");
+        price.className = "shop-item-price";
+        price.textContent = isPurchased(item.id) ? (isEquipped(item.id) ? "Equipped" : "Owned") : "🪙 " + item.price;
+        card.appendChild(info);
+        card.appendChild(price);
+        if (!isPurchased(item.id)) {
+          card.addEventListener("click", function () {
+            if (buyShopItem(item.id)) showShop();
+          });
+        } else {
+          card.addEventListener("click", function () {
+            equipShopItem(item.id);
+            showShop();
+          });
+        }
+        grid.appendChild(card);
+      });
+      shelf.appendChild(grid);
+    }
+    parent.appendChild(shelf);
+  }
+
+  function setShopButton(visible) {
+    if (!els.overlayBtnShop) return;
+    if (visible) {
+      els.overlayBtnShop.hidden = false;
+      els.overlayBtnShop.onclick = showShop;
+    } else {
+      els.overlayBtnShop.hidden = true;
+      els.overlayBtnShop.onclick = null;
+    }
+  }
+
+  function showShop() {
+    render();
+    showOverlay("SHOP", "", "BACK", showMainMenu, null, null, true);
+    els.overlay.classList.add("shop-mode");
+    const extra = els.overlayExtra;
+    if (!extra) return;
+    extra.hidden = false;
+    extra.innerHTML = "";
+    const coins = document.createElement("p");
+    coins.className = "menu-coins";
+    coins.id = "shop-coins";
+    coins.textContent = formatCoins(wallet.coins);
+    extra.appendChild(coins);
+    renderShopShelf(extra);
+  }
+
+  function humanEarnedPlay(event) {
+    return event && event.team === humanTeam();
+  }
+
+  function processPlayRewards(result) {
+    if (!result || result._rewardsApplied) return;
+    result._rewardsApplied = true;
+    const events = result.events || [];
+    const round = state && state.roundIndex ? state.roundIndex : 0;
+    events.forEach(function (event, i) {
+      if (!humanEarnedPlay(event)) return;
+      const id = "play-" + round + "-" + i + "-" + event.type;
+      if (event.type === "goal") awardCoins(CONFIG.GOAL_REWARD, "goal", id);
+      else if (event.type === "intercept") awardCoins(CONFIG.INTERCEPTION_REWARD, "intercept", id);
+      else if (event.type === "block") awardCoins(CONFIG.SHOT_BLOCK_REWARD, "block", id);
+    });
+  }
+
+  function settleMatchCoins() {
+    if (!state || !state.winner || !state.matchRewards || state.matchRewards.matchSettled) return;
+    state.matchRewards.matchSettled = true;
+    const humanWon = state.winner === humanTeam();
+    const lines = [];
+    if (humanWon) {
+      awardCoins(CONFIG.WIN_REWARD, "win", "match-win", { silent: true });
+      lines.push({ label: "Win", amount: CONFIG.WIN_REWARD });
+    } else {
+      awardCoins(CONFIG.LOSS_REWARD, "loss", "match-loss", { silent: true });
+      lines.push({ label: "Loss", amount: CONFIG.LOSS_REWARD });
+    }
+    awardCoins(CONFIG.MATCH_COMPLETE_REWARD, "complete", "match-complete", { silent: true });
+    lines.push({ label: "Match Complete", amount: CONFIG.MATCH_COMPLETE_REWARD });
+    const play = state.matchRewards.play;
+    if (play.goals) lines.push({ label: "Goals", amount: play.goals * CONFIG.GOAL_REWARD });
+    if (play.intercepts) lines.push({ label: "Interceptions", amount: play.intercepts * CONFIG.INTERCEPTION_REWARD });
+    if (play.blocks) lines.push({ label: "Shot Blocks", amount: play.blocks * CONFIG.SHOT_BLOCK_REWARD });
+    const matchEnd = humanWon ? CONFIG.WIN_REWARD + CONFIG.MATCH_COMPLETE_REWARD : CONFIG.LOSS_REWARD + CONFIG.MATCH_COMPLETE_REWARD;
+    state.matchRewards.lastSettlement = {
+      outcome: humanWon ? "win" : "loss",
+      lines: lines,
+      total: matchEnd + play.coins,
+      balance: wallet.coins,
+    };
+  }
+
+  function renderCoinSummary(parent, settlement) {
+    if (!parent || !settlement) return;
+    const wrap = document.createElement("div");
+    wrap.className = "coin-summary";
+    const list = document.createElement("ul");
+    settlement.lines.forEach(function (line) {
+      const li = document.createElement("li");
+      const label = document.createElement("span");
+      label.textContent = line.label;
+      const amount = document.createElement("strong");
+      amount.textContent = "+" + line.amount;
+      li.appendChild(label);
+      li.appendChild(amount);
+      list.appendChild(li);
+    });
+    const total = document.createElement("li");
+    total.className = "total";
+    total.innerHTML = "<span>Total Earned</span><strong>+" + settlement.total + "</strong>";
+    list.appendChild(total);
+    const bal = document.createElement("li");
+    bal.className = "balance";
+    bal.innerHTML = "<span>New Balance</span><strong>" + settlement.balance + "</strong>";
+    list.appendChild(bal);
+    wrap.appendChild(list);
+    parent.appendChild(wrap);
   }
 
   function getUnit(id, units) {
@@ -744,14 +1063,29 @@
 
   // ---------------------------------------------------------------------------
   // CPU (local, same rules as a human — never reads the opponent's hidden plan)
-  // Difficulty later: set CONFIG.CPU_DIFFICULTY to EASY / MEDIUM / HARD
+  // Difficulty: ROOKIE / PRO / MASTER / DEV — quality of the same legal search
   // ---------------------------------------------------------------------------
 
-  let cpuContext = { primaryId: null };
+  let cpuContext = { primaryId: null, predicting: false, likelyHuman: null };
+  const flavorLast = { hover: {}, start: null, confirm: null };
+
+  function cpuDifficultyKey() {
+    const aliases = { EASY: "ROOKIE", MEDIUM: "PRO", HARD: "MASTER" };
+    const key = (state && state.cpuDifficulty) || CONFIG.CPU_DIFFICULTY || "PRO";
+    return aliases[key] || key;
+  }
 
   function cpuProfile() {
-    const key = (state && state.cpuDifficulty) || CONFIG.CPU_DIFFICULTY || "MEDIUM";
-    return CONFIG.CPU_PROFILES[key] || CONFIG.CPU_PROFILES.MEDIUM;
+    const key = cpuDifficultyKey();
+    return CONFIG.CPU_PROFILES[key] || CONFIG.CPU_PROFILES.PRO;
+  }
+
+  function pickFromPool(pool, last) {
+    const list = pool || [];
+    if (!list.length) return "";
+    const options = last ? list.filter(function (msg) { return msg !== last; }) : list;
+    const use = options.length ? options : list;
+    return use[Math.floor(Math.random() * use.length)];
   }
 
   function ballPosition() {
@@ -914,7 +1248,7 @@
     return actions;
   }
 
-  function scoreCpuAction(unit, action) {
+  function scoreCpuActionBase(unit, action) {
     const team = unit.team;
     const holder = state.ball.holderId ? getUnit(state.ball.holderId) : null;
     const weHave = !!(holder && holder.team === team);
@@ -924,6 +1258,12 @@
     const dest = action.dest || { r: unit.r, c: unit.c };
     const role = unit.role;
     const chaser = cpuContext.primaryId;
+    const profile = cpuProfile();
+    const chase = profile.chaseBall != null ? profile.chaseBall : 1;
+    const cover = profile.coverSpace != null ? profile.coverSpace : 1;
+    const lanes = profile.laneAwareness != null ? profile.laneAwareness : 1;
+    const risk = profile.riskUse != null ? profile.riskUse : 1;
+    const tackleBias = profile.tackleBias != null ? profile.tackleBias : 1;
     let s = 0;
 
     if (action.type === ACTION.MOVE && dest.r === unit.r && dest.c === unit.c) {
@@ -934,20 +1274,22 @@
     if (isShotLike(action.type)) {
       s += 110;
       const target = action.shotTarget;
-      if (target && pathLooksBlocked(unit, target, team)) s -= 55;
+      if (target && pathLooksBlocked(unit, target, team)) s -= Math.round(55 * lanes);
       else s += 25;
       if (role === "attacker") s += 8;
       if (oppCountNear(unit, team, 1) > 0) s += 12;
       if (action.type === ACTION.CURVE_SHOT) {
-        if (target && pathLooksBlocked(unit, target, team)) s += 40;
-        s = Math.round(s * 0.72);
+        if (target && pathLooksBlocked(unit, target, team)) s += Math.round(40 * Math.max(risk, 0.7));
+        s = Math.round(s * (0.62 + 0.18 * risk));
       }
       return s;
     }
 
     if (action.type === ACTION.TACKLE) {
-      s += 88;
+      s += Math.round(88 * tackleBias);
       if (role === "defender") s += 8;
+      if (profile.lookAhead >= 2 && holder && distToOppGoal(holder, holder.team) >= 5) s -= 22;
+      if (profile.lookAhead >= 2 && weHave) s -= 30;
       return s;
     }
 
@@ -964,7 +1306,7 @@
         if (inShootRange(ghost)) s += 22;
         if (dangerHere) s += 24;
         if (oppCountNear(occ, team, 1) >= 2) s -= 20;
-        if (pathLooksBlocked(unit, occ, team)) s -= 16;
+        if (pathLooksBlocked(unit, occ, team)) s -= Math.round(16 * lanes);
       } else if (occ && occ.team !== team) {
         s -= 42;
         if (dangerHere >= 2) s += 12;
@@ -974,16 +1316,16 @@
         if (oppCountNear(to, team, 1)) s -= 18;
         if (dangerHere) s += 12;
         if (distToOppGoal(to, team) <= 3) s += 16;
-        if (pathLooksBlocked(unit, to, team)) s -= 10;
+        if (pathLooksBlocked(unit, to, team)) s -= Math.round(10 * lanes);
       }
       if (action.type === ACTION.CURVE_PASS) {
-        if (to && pathLooksBlocked(unit, to, team)) s += 30;
-        else s -= 6;
-        s = Math.round(s * 0.78);
+        if (to && pathLooksBlocked(unit, to, team)) s += Math.round(30 * Math.max(risk, 0.6));
+        else s -= Math.round(6 * (2 - Math.min(risk, 1.2)));
+        s = Math.round(s * (0.68 + 0.16 * risk));
       } else if (action.type === ACTION.AIR_BALL) {
-        if (to && pathLooksBlocked(unit, to, team)) s += 26;
-        else s -= 5;
-        s = Math.round(s * 0.74);
+        if (to && pathLooksBlocked(unit, to, team)) s += Math.round(26 * Math.max(risk, 0.6));
+        else s -= Math.round(5 * (2 - Math.min(risk, 1.2)));
+        s = Math.round(s * (0.64 + 0.16 * risk));
       }
       return s;
     }
@@ -993,12 +1335,12 @@
       if (theyHave && zone.some(function (z) {
         return z.r === holder.r && z.c === holder.c;
       })) {
-        s += 42;
+        s += Math.round(42 * cover);
       }
       if (free && zone.some(function (z) {
         return z.r === ballPos.r && z.c === ballPos.c;
       })) {
-        s += 30;
+        s += Math.round(30 * cover);
       }
       if (theyHave) {
         const lane = cellsBetween(holder.r, holder.c, goalSquares(holder.team)[0].r, goalSquares(holder.team)[0].c);
@@ -1007,10 +1349,10 @@
             return p.r === z.r && p.c === z.c;
           });
         })) {
-          s += 14;
+          s += Math.round(14 * cover);
         }
       }
-      s += Math.max(0, 3 - distToOwnGoal(unit, team)) * 4;
+      s += Math.max(0, 3 - distToOwnGoal(unit, team)) * Math.round(4 * cover);
       if (role === "attacker") s -= 16;
       return s;
     }
@@ -1031,24 +1373,26 @@
       if (distToOppGoal(dest, team) <= shotRangeFor(unit)) s += 20;
     } else if (free) {
       const closer = chebyshev(unit, ballPos) - chebyshev(dest, ballPos);
-      if (unit.id === chaser) {
-        s += closer * 16 + 8;
+      const isChaser = unit.id === chaser || chase >= 1.2;
+      if (isChaser) {
+        s += closer * Math.round(16 * chase) + 8;
         if (action.type === ACTION.SPRINT && closer > 0) s += 12;
       } else {
         s += closer * 2 - 12;
         if (role === "attacker") s += (distToOppGoal(unit, team) - distToOppGoal(dest, team)) * 6;
-        if (role === "defender") s += (distToOwnGoal(unit, team) - distToOwnGoal(dest, team)) * 6;
+        if (role === "defender") s += (distToOwnGoal(unit, team) - distToOwnGoal(dest, team)) * Math.round(6 * cover);
       }
     } else if (theyHave) {
       const closer = chebyshev(unit, ballPos) - chebyshev(dest, ballPos);
-      if (unit.id === chaser) {
-        s += closer * 14 + 6;
+      const isChaser = unit.id === chaser || chase >= 1.2;
+      if (isChaser) {
+        s += closer * Math.round(14 * chase) + 6;
         if (chebyshev(dest, holder) <= 1) s += 18;
         if (action.type === ACTION.SPRINT && closer > 0) s += 10;
       } else if (role === "defender") {
-        s += (distToOwnGoal(unit, team) - distToOwnGoal(dest, team)) * 10;
-        s += closer * 4;
-        if (distToOwnGoal(dest, team) <= 2) s += 10;
+        s += (distToOwnGoal(unit, team) - distToOwnGoal(dest, team)) * Math.round(10 * cover);
+        s += closer * Math.round(4 * chase);
+        if (distToOwnGoal(dest, team) <= 2) s += Math.round(10 * cover);
       } else {
         s += (distToOppGoal(unit, team) - distToOppGoal(dest, team)) * 9;
         s += closer * 3;
@@ -1069,10 +1413,93 @@
             })
           )
         : 99;
-      if (distToOwnGoal(dest, team) > 4 && otherCover > 3 && theyHave) s -= 18;
+      if (distToOwnGoal(dest, team) > 4 && otherCover > 3 && theyHave) s -= Math.round(18 * cover);
     }
 
     if (role === "attacker" && distToOwnGoal(dest, team) <= 1 && !theyHave) s -= 10;
+    return s;
+  }
+
+  function actionPathCells(from, action) {
+    if (isPassLike(action.type) && action.passTo) return cellsBetween(from.r, from.c, action.passTo.r, action.passTo.c);
+    if (isShotLike(action.type) && action.shotTarget) {
+      const path = cellsBetween(from.r, from.c, action.shotTarget.r, action.shotTarget.c);
+      path.push(action.shotTarget);
+      return path;
+    }
+    return [];
+  }
+
+  function coversCell(unit, action, cell) {
+    const dest = action.dest || { r: unit.r, c: unit.c };
+    if (dest.r === cell.r && dest.c === cell.c) return true;
+    if (action.type === ACTION.DEFEND) {
+      return defensiveZone(unit, action.dir).some(function (z) {
+        return z.r === cell.r && z.c === cell.c;
+      });
+    }
+    return false;
+  }
+
+  function predictionBonus(unit, action) {
+    const likely = cpuContext.likelyHuman;
+    const profile = cpuProfile();
+    if (!likely || cpuContext.predicting || !profile.predictPlayer) return 0;
+    let b = 0;
+    Object.keys(likely).forEach(function (id) {
+      const opp = getUnit(id);
+      const replies = likely[id] || [];
+      replies.forEach(function (oppAct, idx) {
+        const weight = idx === 0 ? 1 : 0.45;
+        const path = opp && oppAct ? actionPathCells(opp, oppAct) : [];
+        path.forEach(function (cell) {
+          if (coversCell(unit, action, cell)) b += 16 * weight;
+        });
+        if (opp && isShotLike(oppAct.type) && coversCell(unit, action, oppAct.shotTarget || opp)) b += 22 * weight;
+        if (opp && isPassLike(oppAct.type) && oppAct.passTo && coversCell(unit, action, oppAct.passTo)) b += 14 * weight;
+        if (oppAct.type === ACTION.TACKLE && state.ball.holderId === unit.id) {
+          const dest = action.dest || unit;
+          if (chebyshev(dest, opp) > chebyshev(unit, opp)) b += 12 * weight;
+        }
+      });
+    });
+    return Math.round(b * profile.predictPlayer);
+  }
+
+  function patternBonus(unit, action) {
+    const profile = cpuProfile();
+    if (!profile.patternMemory || cpuContext.predicting) return 0;
+    const recent = (state.cpuMemory && state.cpuMemory.recent) || [];
+    if (recent.length < 4) return 0;
+    const types = recent.map(function (row) { return row.type; });
+    const passN = types.filter(function (t) { return t === ACTION.PASS || t === ACTION.CURVE_PASS || t === ACTION.AIR_BALL; }).length;
+    const shootN = types.filter(function (t) { return t === ACTION.SHOOT || t === ACTION.CURVE_SHOT; }).length;
+    const sprintN = types.filter(function (t) { return t === ACTION.SPRINT || t === ACTION.DRIBBLE; }).length;
+    let b = 0;
+    if (passN >= 4 && action.type === ACTION.DEFEND) b += 10;
+    if (shootN >= 3 && action.type === ACTION.DEFEND) b += 12;
+    if (sprintN >= 4 && isPassLike(action.type)) b += 8;
+    return b;
+  }
+
+  function ownFutureBonus(unit, action) {
+    const profile = cpuProfile();
+    if (!profile.lookAhead) return 0;
+    const dest = action.dest || { r: unit.r, c: unit.c };
+    const ghost = { r: dest.r, c: dest.c, team: unit.team, role: unit.role, id: unit.id };
+    let b = 0;
+    if (state.ball.holderId === unit.id && inShootRange(ghost)) b += 10 * profile.lookAhead;
+    if (unit.role === "defender" && distToOwnGoal(dest, unit.team) <= 2) b += 6 * profile.coverSpace;
+    return Math.round(b);
+  }
+
+  function scoreCpuAction(unit, action) {
+    let s = scoreCpuActionBase(unit, action);
+    s += predictionBonus(unit, action);
+    s += patternBonus(unit, action);
+    s += ownFutureBonus(unit, action);
+    const jitter = cpuProfile().scoreJitter || 0;
+    if (jitter) s += (Math.random() - 0.5) * 2 * jitter;
     return s;
   }
 
@@ -1081,6 +1508,11 @@
       return b.score - a.score;
     });
     const profile = cpuProfile();
+    if (profile.mistakeChance && Math.random() < profile.mistakeChance) {
+      const depth = Math.min(scored.length, profile.mistakeDepth || 6);
+      const slice = scored.slice(0, Math.max(2, depth));
+      return slice[Math.floor(Math.random() * slice.length)].action;
+    }
     const best = scored[0].score;
     const pool = scored.slice(0, profile.topN).filter(function (item, i) {
       return i === 0 || item.score >= best - 45;
@@ -1098,9 +1530,56 @@
     return pool[0].action;
   }
 
+  function likelyHumanActions() {
+    const team = humanTeam();
+    const profile = cpuProfile();
+    if (!profile.predictPlayer) return null;
+    const savedPrimary = cpuContext.primaryId;
+    const savedPredicting = cpuContext.predicting;
+    const savedHumanPlans = state.plans[team];
+    state.plans[team] = {};
+    cpuContext.predicting = true;
+    cpuContext.primaryId = pickPrimaryChaser(team);
+    const branches = Math.max(1, profile.predictBranches || 1);
+    const out = {};
+    teamUnits(team).forEach(function (unit) {
+      const candidates = generateCpuActions(unit);
+      if (!candidates.length) return;
+      const scored = candidates.map(function (action) {
+        return { action: action, score: scoreCpuActionBase(unit, action) };
+      });
+      scored.sort(function (a, b) {
+        return b.score - a.score;
+      });
+      out[unit.id] = scored.slice(0, branches).map(function (row) {
+        return row.action;
+      });
+    });
+    cpuContext.primaryId = savedPrimary;
+    cpuContext.predicting = savedPredicting;
+    state.plans[team] = savedHumanPlans;
+    return out;
+  }
+
+  function rememberHumanPatterns(plans) {
+    if (!state || state.gameMode !== "PVCPU") return;
+    if (!state.cpuMemory) state.cpuMemory = { recent: [] };
+    const human = humanTeam();
+    teamUnits(human).forEach(function (unit) {
+      const plan = plans[unit.id];
+      if (!plan || plan.implicitStay) return;
+      state.cpuMemory.recent.push({ type: plan.type, role: unit.role });
+    });
+    if (state.cpuMemory.recent.length > 16) {
+      state.cpuMemory.recent = state.cpuMemory.recent.slice(-16);
+    }
+  }
+
   function generateCpuPlans(team) {
     state.plans[team] = {};
     cpuContext.primaryId = pickPrimaryChaser(team);
+    cpuContext.predicting = false;
+    cpuContext.likelyHuman = cpuProfile().predictPlayer ? likelyHumanActions() : null;
     cpuPlanOrder(team).forEach(function (unit) {
       const candidates = generateCpuActions(unit);
       if (!candidates.length) return;
@@ -1317,7 +1796,8 @@
           ball.r = receiver.r;
           ball.c = receiver.c;
           events.push({
-            type: receiver.team === unit.team ? "info" : "steal",
+            type: receiver.team === unit.team ? "info" : "intercept",
+            team: receiver.team,
             text: unitTitle(unit) + " " + toVerb + " " + unitTitle(receiver) + ".",
           });
         } else {
@@ -1367,7 +1847,7 @@
           ball.holderId = hit.interceptor.id;
           ball.r = hit.interceptor.r;
           ball.c = hit.interceptor.c;
-          events.push({ type: "steal", text: unitTitle(hit.interceptor) + " intercepted the pass." });
+          events.push({ type: "intercept", team: hit.interceptor.team, text: unitTitle(hit.interceptor) + " intercepted the pass." });
           ballFlight.push(flightSeg("straight", start, { r: hit.interceptor.r, c: hit.interceptor.c }));
         } else {
           receiveAt(dest, flightSeg("straight", start, dest), "passed to", "passed into");
@@ -1383,7 +1863,7 @@
           ball.holderId = hit.interceptor.id;
           ball.r = hit.interceptor.r;
           ball.c = hit.interceptor.c;
-          events.push({ type: "steal", text: unitTitle(hit.interceptor) + " cut out the curve pass." });
+          events.push({ type: "intercept", team: hit.interceptor.team, text: unitTitle(hit.interceptor) + " cut out the curve pass." });
           ballFlight.push(flightSeg("curve", start, { r: hit.interceptor.r, c: hit.interceptor.c }, { curveDir: curveDir }));
         } else if (outcome === "clean") {
           receiveAt(dest, flightSeg("curve", start, dest, { curveDir: curveDir }), "curled a pass to", "curled a pass into");
@@ -1489,7 +1969,7 @@
           ball.holderId = blocker.id;
           ball.r = blocker.r;
           ball.c = blocker.c;
-          events.push({ type: "steal", text: unitTitle(blocker) + " blocked the shot." });
+          events.push({ type: "block", team: blocker.team, text: unitTitle(blocker) + " blocked the shot." });
           ballFlight.push(flight);
         } else {
           goal = unit.team;
@@ -1497,7 +1977,7 @@
           ball.holderId = null;
           ball.r = target.r;
           ball.c = target.c;
-          events.push({ type: "goal", text: "GOAL! " + teamName(unit.team) + " scores." });
+          events.push({ type: "goal", team: unit.team, text: "GOAL! " + teamName(unit.team) + " scores." });
           ballFlight.push(flight);
         }
       } else {
@@ -1701,6 +2181,7 @@
     state.phase = "reveal";
     state.revealFrom = clone(state.units);
     state.revealPlans = clone(Object.assign({}, state.plans.blue, state.plans.orange));
+    rememberHumanPatterns(state.revealPlans);
     state.selectedId = null;
     render();
 
@@ -1720,10 +2201,13 @@
       state.fxBall = null;
       state.phase = "gameover";
       hideGoalBanner();
+      settleMatchCoins();
       render();
+      const settlement = state.matchRewards && state.matchRewards.lastSettlement;
+      const outcome = settlement && settlement.outcome === "win" ? "Victory" : "Defeat";
       showOverlay(
-        teamName(state.winner) + " TEAM WINS",
-        scoreLine(),
+        "MATCH COMPLETE",
+        outcome + " · " + scoreLine(),
         "PLAY AGAIN",
         function () {
           startMatch(state.gameMode || "PVP");
@@ -1731,6 +2215,11 @@
         "MAIN MENU",
         showMainMenu
       );
+      if (els.overlayExtra && settlement) {
+        els.overlayExtra.hidden = false;
+        els.overlayExtra.innerHTML = "";
+        renderCoinSummary(els.overlayExtra, settlement);
+      }
     } else if (result && result.goal) {
       state.phase = "goal";
       hideGoalBanner();
@@ -2019,6 +2508,8 @@
     state.zoneCells = result.zones;
     state.pendingKickoff = null;
     state.fxBall = null;
+    state.roundIndex = (state.roundIndex || 0) + 1;
+    processPlayRewards(result);
 
     if (result.goal) {
       state.events = result.events
@@ -2088,17 +2579,108 @@
     startPlanning(CONFIG.FIRST_PLANNING_TEAM);
   }
 
-  function startMatch(mode) {
+  function startMatch(mode, difficulty) {
+    const kept =
+      difficulty ||
+      (state && mode === "PVCPU" && state.cpuDifficulty) ||
+      CONFIG.CPU_DIFFICULTY ||
+      "PRO";
     clearTimers();
     setMoveAnim(false);
     hideGoalBanner();
     hideOverlay();
-    state = freshMatch(mode);
-    startPlanning(mode === "PVCPU" ? humanTeam() : CONFIG.FIRST_PLANNING_TEAM);
+    state = freshMatch(mode, kept);
+    if (mode === "PVCPU") {
+      render();
+      showKickoffFlavor();
+      return;
+    }
+    startPlanning(CONFIG.FIRST_PLANNING_TEAM);
   }
 
   function resetMatch() {
-    startMatch(state && state.gameMode ? state.gameMode : "PVP");
+    startMatch(state && state.gameMode ? state.gameMode : "PVP", state && state.cpuDifficulty);
+  }
+
+  function showKickoffFlavor() {
+    const key = cpuDifficultyKey();
+    const pool = (CONFIG.AI_FLAVOR && CONFIG.AI_FLAVOR.START && CONFIG.AI_FLAVOR.START[key]) || [];
+    const msg = pickFromPool(pool, flavorLast.start);
+    flavorLast.start = msg;
+    const label = (cpuProfile().label || key).toUpperCase();
+    showOverlay(
+      label,
+      msg,
+      "KICK OFF",
+      function () {
+        hideOverlay();
+        startPlanning(humanTeam());
+      },
+      null,
+      null,
+      true
+    );
+  }
+
+  function confirmDevDifficulty() {
+    const pool = (CONFIG.AI_FLAVOR && CONFIG.AI_FLAVOR.CONFIRM_DEV) || [];
+    const msg = pickFromPool(pool, flavorLast.confirm);
+    flavorLast.confirm = msg;
+    showOverlay(
+      "DEV",
+      msg,
+      "I’M SURE",
+      function () {
+        startMatch("PVCPU", "DEV");
+      },
+      "GO BACK",
+      showAiSelectMenu,
+      true
+    );
+  }
+
+  function showAiSelectMenu() {
+    render();
+    showOverlay(
+      "CHOOSE YOUR OPPONENT",
+      "",
+      "BACK",
+      showMainMenu,
+      null,
+      null,
+      true
+    );
+    els.overlay.classList.add("ai-select");
+    const extra = els.overlayExtra;
+    if (!extra) return;
+    extra.hidden = false;
+    extra.innerHTML = "";
+    const flavor = document.createElement("p");
+    flavor.className = "ai-flavor";
+    flavor.textContent = "Hover an opponent.";
+    extra.appendChild(flavor);
+    const grid = document.createElement("div");
+    grid.className = "ai-grid";
+    ["ROOKIE", "PRO", "MASTER", "DEV"].forEach(function (key) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = (CONFIG.CPU_PROFILES[key] && CONFIG.CPU_PROFILES[key].label) || key;
+      if (key === "DEV") btn.classList.add("dev");
+      function showHover() {
+        const pool = (CONFIG.AI_FLAVOR && CONFIG.AI_FLAVOR.HOVER && CONFIG.AI_FLAVOR.HOVER[key]) || [];
+        const msg = pickFromPool(pool, flavorLast.hover[key]);
+        flavorLast.hover[key] = msg;
+        flavor.textContent = msg;
+      }
+      btn.addEventListener("mouseenter", showHover);
+      btn.addEventListener("focus", showHover);
+      btn.addEventListener("click", function () {
+        if (key === "DEV") confirmDevDifficulty();
+        else startMatch("PVCPU", key);
+      });
+      grid.appendChild(btn);
+    });
+    extra.appendChild(grid);
   }
 
   function showMainMenu() {
@@ -2117,11 +2699,20 @@
         startMatch("PVP");
       },
       "PLAYER VS CPU",
-      function () {
-        startMatch("PVCPU");
-      },
+      showAiSelectMenu,
       true
     );
+    setShopButton(true);
+    const extra = els.overlayExtra;
+    if (extra) {
+      extra.hidden = false;
+      extra.innerHTML = "";
+      const coins = document.createElement("p");
+      coins.className = "menu-coins";
+      coins.id = "menu-coins";
+      coins.textContent = formatCoins(wallet.coins);
+      extra.appendChild(coins);
+    }
   }
 
   function setMoveAnim(on) {
@@ -3024,6 +3615,7 @@
     els.turn.textContent = turn;
     els.scoreBlue.textContent = String(state.score.blue);
     els.scoreOrange.textContent = String(state.score.orange);
+    refreshCoinUi();
   }
 
   function render() {
@@ -3035,9 +3627,22 @@
     renderSidebar();
   }
 
+  function clearOverlayExtra() {
+    if (!els.overlayExtra) return;
+    els.overlayExtra.innerHTML = "";
+    els.overlayExtra.hidden = true;
+    if (els.overlay) {
+      els.overlay.classList.remove("ai-select");
+      els.overlay.classList.remove("shop-mode");
+    }
+  }
+
   function showOverlay(title, body, btn, onClick, altBtn, altClick, menuMode) {
+    clearOverlayExtra();
+    setShopButton(false);
     els.overlayTitle.textContent = title;
     els.overlayBody.textContent = body || "";
+    els.overlayBody.hidden = !body;
     els.overlayBtn.textContent = btn;
     els.overlay.dataset.mode = title;
     els.overlay.classList.toggle("menu-mode", !!menuMode);
@@ -3060,6 +3665,8 @@
   function hideOverlay() {
     els.overlay.classList.add("hidden");
     els.overlay.classList.remove("menu-mode");
+    els.overlay.classList.remove("ai-select");
+    els.overlay.classList.remove("shop-mode");
     els.overlay.setAttribute("hidden", "");
     els.overlay.setAttribute("aria-hidden", "true");
     els.overlayBtn.onclick = null;
@@ -3067,6 +3674,8 @@
       els.overlayBtnAlt.hidden = true;
       els.overlayBtnAlt.onclick = null;
     }
+    setShopButton(false);
+    clearOverlayExtra();
   }
 
   // ---------------------------------------------------------------------------
@@ -3159,13 +3768,20 @@
     els.overlayBody = document.getElementById("overlay-body");
     els.overlayBtn = document.getElementById("overlay-btn");
     els.overlayBtnAlt = document.getElementById("overlay-btn-alt");
+    els.overlayBtnShop = document.getElementById("overlay-btn-shop");
+    els.overlayExtra = document.getElementById("overlay-extra");
     els.goalBanner = document.getElementById("goal-banner");
+    els.coinToast = document.getElementById("coin-toast");
+    els.hudCoins = document.getElementById("hud-coins");
     els.riskPanel = document.getElementById("risk-panel");
     els.curveDirRow = document.getElementById("curve-dir-row");
   }
 
   function init() {
     cacheEls();
+    wallet = loadWallet();
+    saveWallet();
+    refreshCoinUi();
     buildBoard();
     bindUi();
     assertRiskTables();

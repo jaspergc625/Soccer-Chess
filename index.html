@@ -9,9 +9,15 @@
 <body>
   <div id="app">
     <header id="hud">
-      <div class="hud-block">
-        <div class="hud-label">Phase</div>
-        <div id="hud-phase" class="hud-value">PLANNING</div>
+      <div class="hud-left">
+        <div class="hud-block">
+          <div class="hud-label">Phase</div>
+          <div id="hud-phase" class="hud-value">PLANNING</div>
+        </div>
+        <div class="hud-block coin-hud">
+          <div class="hud-label">Coins</div>
+          <div id="hud-coins" class="hud-value">🪙 0</div>
+        </div>
       </div>
       <div class="hud-block scoreboard">
         <div class="team-score blue">
@@ -104,14 +110,17 @@
     <div class="overlay-card">
       <h1 id="overlay-title"></h1>
       <p id="overlay-body"></p>
+      <div id="overlay-extra" class="overlay-extra" hidden></div>
       <div id="overlay-actions" class="overlay-actions">
         <button id="overlay-btn" type="button">Ready</button>
         <button id="overlay-btn-alt" type="button" hidden>MAIN MENU</button>
+        <button id="overlay-btn-shop" type="button" hidden>SHOP</button>
       </div>
     </div>
   </div>
 
   <div id="goal-banner" class="goal-banner hidden" hidden aria-live="assertive">GOAL!</div>
+  <div id="coin-toast" class="coin-toast hidden" hidden aria-live="polite"></div>
 
   <script src="config.js"></script>
   <script src="game.js"></script>
